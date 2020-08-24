@@ -8,21 +8,16 @@ import (
 	"github.com/envoyproxy/xds-relay/internal/app/metrics"
 
 	v2 "github.com/envoyproxy/go-control-plane/envoy/api/v2"
+	clusterv3 "github.com/envoyproxy/go-control-plane/envoy/service/cluster/v3"
+	endpointv3 "github.com/envoyproxy/go-control-plane/envoy/service/endpoint/v3"
+	listenerv3 "github.com/envoyproxy/go-control-plane/envoy/service/listener/v3"
+	routev3 "github.com/envoyproxy/go-control-plane/envoy/service/route/v3"
+	resourcev2 "github.com/envoyproxy/go-control-plane/pkg/resource/v2"
+	resourcev3 "github.com/envoyproxy/go-control-plane/pkg/resource/v3"
 	"github.com/envoyproxy/xds-relay/internal/pkg/log"
 	"github.com/envoyproxy/xds-relay/internal/pkg/util"
 	"github.com/uber-go/tally"
 	"google.golang.org/grpc"
-)
-
-const (
-	// ListenerTypeURL is the resource url for listener
-	ListenerTypeURL = "type.googleapis.com/envoy.api.v2.Listener"
-	// ClusterTypeURL is the resource url for cluster
-	ClusterTypeURL = "type.googleapis.com/envoy.api.v2.Cluster"
-	// EndpointTypeURL is the resource url for endpoints
-	EndpointTypeURL = "type.googleapis.com/envoy.api.v2.ClusterLoadAssignment"
-	// RouteTypeURL is the resource url for route
-	RouteTypeURL = "type.googleapis.com/envoy.api.v2.RouteConfiguration"
 )
 
 // UnsupportedResourceError is a custom error for unsupported typeURL
@@ -57,9 +52,13 @@ type Client interface {
 
 type client struct {
 	ldsClient   v2.ListenerDiscoveryServiceClient
+	ldsClientV3 listenerv3.ListenerDiscoveryServiceClient
 	rdsClient   v2.RouteDiscoveryServiceClient
+	rdsClientV3 routev3.RouteDiscoveryServiceClient
 	edsClient   v2.EndpointDiscoveryServiceClient
+	edsClientV3 endpointv3.EndpointDiscoveryServiceClient
 	cdsClient   v2.ClusterDiscoveryServiceClient
+	cdsClientV3 clusterv3.ClusterDiscoveryServiceClient
 	callOptions CallOptions
 
 	logger log.Logger
@@ -101,9 +100,13 @@ func New(
 	}
 
 	ldsClient := v2.NewListenerDiscoveryServiceClient(conn)
+	ldsClientV3 := listenerv3.NewListenerDiscoveryServiceClient(conn)
 	rdsClient := v2.NewRouteDiscoveryServiceClient(conn)
+	rdsClientV3 := routev3.NewRouteDiscoveryServiceClient(conn)
 	edsClient := v2.NewEndpointDiscoveryServiceClient(conn)
+	edsClientV3 := endpointv3.NewEndpointDiscoveryServiceClient(conn)
 	cdsClient := v2.NewClusterDiscoveryServiceClient(conn)
+	cdsClientV3 := v2.NewClusterDiscoveryServiceClient(conn)
 
 	go shutDown(ctx, conn)
 
@@ -126,17 +129,29 @@ func (m *client) OpenStream(request v2.DiscoveryRequest) (<-chan *v2.DiscoveryRe
 		scope  tally.Scope
 	)
 	switch request.GetTypeUrl() {
-	case ListenerTypeURL:
+	case resourcev2.ListenerType:
 		stream, err = m.ldsClient.StreamListeners(ctx)
 		scope = m.scope.SubScope(metrics.ScopeUpstreamLDS)
-	case ClusterTypeURL:
+	case resourcev3.ListenerType:
+		stream, err = m.ldsClientV3.StreamListeners(ctx)
+		scope = m.scope.SubScope(metrics.ScopeUpstreamLDS)
+	case resourcev2.ClusterType:
 		stream, err = m.cdsClient.StreamClusters(ctx)
 		scope = m.scope.SubScope(metrics.ScopeUpstreamCDS)
-	case RouteTypeURL:
+	case resourcev3.ClusterType:
+		stream, err = m.cdsClientV3.StreamClusters(ctx)
+		scope = m.scope.SubScope(metrics.ScopeUpstreamCDS)
+	case resourcev2.RouteType:
 		stream, err = m.rdsClient.StreamRoutes(ctx)
 		scope = m.scope.SubScope(metrics.ScopeUpstreamRDS)
-	case EndpointTypeURL:
+	case resourcev3.RouteType:
+		stream, err = m.rdsClientV3.StreamRoutes(ctx)
+		scope = m.scope.SubScope(metrics.ScopeUpstreamRDS)
+	case resourcev2.EndpointType:
 		stream, err = m.edsClient.StreamEndpoints(ctx)
+		scope = m.scope.SubScope(metrics.ScopeUpstreamEDS)
+	case resourcev3.EndpointType:
+		stream, err = m.edsClientV3.StreamEndpoints(ctx)
 		scope = m.scope.SubScope(metrics.ScopeUpstreamEDS)
 	default:
 		defer cancel()
